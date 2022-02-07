@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <group
+        android:id="@+id/group1"
+        android:checkableBehavior="single">
+        <item
+            android:id="@+id/model_background_remover"
+            android:title="@string/background_remover"
+            android:checked="true" />
+        <item
+            android:id="@+id/model_fresh_class"
+            android:title="@string/freshness_classifier" />
+
+    </group>
+
+</menu>
