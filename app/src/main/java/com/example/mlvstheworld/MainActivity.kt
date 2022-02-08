@@ -21,6 +21,8 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.example.mlvstheworld.ModelInputDims.modelScaleH
+import com.example.mlvstheworld.ModelInputDims.modelScaleW
 import com.example.mlvstheworld.databinding.ActivityMainBinding
 import com.google.common.util.concurrent.ListenableFuture
 import org.tensorflow.lite.DataType
@@ -41,9 +43,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private val PERMISSIONS_REQUIRED = arrayOf(Manifest.permission.CAMERA)
     private lateinit var drawerToggle: ActionBarDrawerToggle
-    private val strategyBackgroundRemover = "backgroundRemover"
-    private val strategyFreshnessClassifier = "freshnessclassifier"
-    private var modelStrategy: String = strategyBackgroundRemover
+    private var model: MLModelStats = BackgroundRemover
     private lateinit var cameraProviderFuture: ListenableFuture<ProcessCameraProvider>
 
     /** Blocking camera operations are performed using this executor */
@@ -69,10 +69,12 @@ class MainActivity : AppCompatActivity() {
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
 
         binding.navViewMlList.setNavigationItemSelectedListener {
+
             when (it.itemId) {
-                R.id.model_background_remover -> modelStrategy = strategyBackgroundRemover
+                R.id.model_background_remover -> model = BackgroundRemover
                 R.id.model_fresh_class -> {
-                    modelStrategy = strategyFreshnessClassifier
+                    model.close(this,binding)
+                    model = FreshnessClassifier
                 }
 
             }
@@ -112,9 +114,6 @@ class MainActivity : AppCompatActivity() {
         preview.setSurfaceProvider(binding.previewView.surfaceProvider)
 
 
-        val modelScaleH = 176
-        val modelScaleW = 128
-
 
         val imageAnalysis = ImageAnalysis.Builder()
             .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
@@ -145,20 +144,11 @@ class MainActivity : AppCompatActivity() {
                 image.height, Bitmap.Config.ARGB_8888
             )
             bitmap.copyPixelsFromBuffer(buffer)
-            Log.d(
-                "FirstFragment",
-                "binding.previewView.width  image.height ${binding.previewView.width / 128} ${binding.previewView.height}"
-            )
+
 
             // Initialization code
-// Create an ImageProcessor with all ops required. For more ops, please
-// refer to the ImageProcessor Architecture section in this README.
-
-
-//            val size: Int = if (image.height > image.width) image.width else image.height
-//            val sizeH = modelScaleH * (image.height / modelScaleH)
-//            val sizeW = modelScaleW * (bitmapW / modelScaleW)
-//            Log.d("FirstFragment", "sizeW  sizeH ${sizeH} ${sizeH}")
+            // Create an ImageProcessor with all ops required. For more ops, please
+            // refer to the ImageProcessor Architecture section in this README.
 
             val imageProcessor = ImageProcessor.Builder()
                 .add(Rot90Op(135))
@@ -175,10 +165,7 @@ class MainActivity : AppCompatActivity() {
             tensorImage.load(bitmap)
             val processedImage = imageProcessor.process(tensorImage)
 
-            Log.d(
-                "FirstFragment",
-                "processedImage.width  processedImage.height ${processedImage.width} ${processedImage.height}"
-            )
+
             // Create a container for the result and specify that this is a quantized model.
             // Hence, the 'DataType' is defined as UINT8 (8-bit unsigned integer)
             //            val probabilityBuffer = TensorBuffer.createFixedSize(intArrayOf(1, 7), DataType.UINT8)
@@ -197,48 +184,12 @@ class MainActivity : AppCompatActivity() {
             // Initialise the model
             var tflite: Interpreter? = null
             try {
-                val modelString = when (modelStrategy) {
-                    strategyBackgroundRemover -> {
-                        this.runOnUiThread {
-                            binding.tvResultOutput.text = getString(R.string.background_remover)
-                        }
-
-                        "BackgroundRemoverStatic2WxH_128x176"
-                    }
-
-                    strategyFreshnessClassifier -> {
-                        this.runOnUiThread {
-                            val cleanBitmap = Bitmap.createBitmap(
-                                modelScaleW,
-                                modelScaleH,
-                                Bitmap.Config.ARGB_8888,
-                                true
-                            )
-                            cleanBitmap.setPixels(
-                                IntArray(modelScaleW * modelScaleH * 1) { 255 },
-                                0,
-                                modelScaleW,
-                                0,
-                                0,
-                                modelScaleW,
-                                modelScaleH
-                            )
-                            binding.ivOutput.setImageBitmap(
-                                cleanBitmap
-                            )
-                        }
-
-                        "FreshnessFGclassifier2WxH_128x176"
-                    }
-                    else -> "BackgroundRemover2StaticWxH_128x176"
-                }
-
+                val modelString = model.fileName
 
                 val mappedByteBuffer = FileUtil.loadMappedFile(
                     this,
                     "$modelString.tflite"//BackgroundRemoverStaticOvertrained128x96 FreshnessFGclassifier128x128
                 )
-
 
                 tflite = Interpreter(mappedByteBuffer, tfliteOptions)
             } catch (e: IOException) {
@@ -252,37 +203,16 @@ class MainActivity : AppCompatActivity() {
             val inputBuffer =
                 arrayOf(Array(modelScaleH) { Array(modelScaleW) { floatArrayOf(0f, 0f, 0f) } })
 
-            val outputArray = when (modelStrategy) {
-                strategyBackgroundRemover -> {
-                    Log.d("FirstFragment", "outputArray is $strategyBackgroundRemover")
-                    arrayOf(Array(modelScaleH) { Array(modelScaleW) { floatArrayOf(1f) } })
-                }
-
-                strategyFreshnessClassifier -> {
-                    Log.d("FirstFragment", "outputArray is $strategyFreshnessClassifier")
-                    arrayOf(Array(1) { Array(1) { FloatArray(12) } })
-                }
-                else -> arrayOf(Array(modelScaleH) { Array(modelScaleW) { floatArrayOf(1f) } })
-            }
-            Log.d(
-                "FirstFragment",
-                "outputArray is ${outputArray[0].size} ${outputArray[0][0].size}"
-            )
+            val outputArray = model.outputArray
 
 
             val processedBitmap = processedImage.bitmap
 
-            Log.d(
-                "FirstFragment",
-                "processedBitmap.height , width ${processedBitmap.height}, ${processedBitmap.width}"
-            )
-
-//            val testInput = IntArray(128 * 128 * 1) { 255 }
 
             for ((i, ix) in inputBuffer[0].withIndex()) {
                 for (j in ix.indices) {
                     val pixelval = processedBitmap.getPixel(j, i)
-//                    testInput[i * 128 + j + 0] = pixelval
+
                     inputBuffer[0][i][j] = floatArrayOf(
                         (Color.red(pixelval)).toFloat(),
                         (Color.green(pixelval)).toFloat(),
@@ -292,31 +222,25 @@ class MainActivity : AppCompatActivity() {
             }
 
 
-//            val testBitmap =
-//                Bitmap.createBitmap(128, 128, Bitmap.Config.ARGB_8888, true)
-//            testBitmap.setPixels(testInput, 0, 128, 0, 0, 128, 128)
-//
-//            this.runOnUiThread {
-//                binding.ivOutput.alpha = 0.8f
-//                binding.ivOutput.setImageBitmap(
-//                    processedBitmap//bitmap//processedBitmap
-//                )
-//            }
+            // Not happy with this part
+            // Maybe I should train models that have the same inputs and outputs
+            var result = arrayOf(Array(1) { Array(1) { FloatArray(1) } })
 
-
-            when (modelStrategy) {
-                strategyBackgroundRemover -> {
+            when (model.fileName) {
+                BackgroundRemover.fileName -> {
                     tflite?.run(inputBuffer, outputArray)
-                    backgroundRemover(outputArray, inputBuffer)
+                    result = outputArray
                 }
 
-                strategyFreshnessClassifier -> {
+                FreshnessClassifier.fileName -> {
                     val outArray = outputArray[0][0]
                     tflite?.run(inputBuffer, outArray)
-                    freshnessClassifier(outArray)
+                    result = arrayOf(arrayOf(outArray))
                 }
                 else -> null
             }
+
+            model.processOutput(this,binding,result)
 
             image.close()
         }
@@ -330,86 +254,6 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    private fun backgroundRemover(
-        outputArray: Array<Array<Array<FloatArray>>>,
-        inputArray: Array<Array<Array<FloatArray>>>
-    ) {
-        val thisScaleW = 128
-        val thisScaleH = 176
-        val extraSpace = 0
-        //arrayOf(Array(modelScaleH) { Array(modelScaleW) { floatArrayOf(1f) } })
-        val withAlpha = IntArray((thisScaleH + extraSpace) * thisScaleW * 1) {
-            Color.argb(
-                (0.6f * 255).toInt(), 3,
-                218, 197
-            )
-        }
-        Log.d("FirstFragment", "running backgroundRemover")
-
-//        val trimmedArray = arrayOf(Array(thisScaleH) { Array(thisScaleW) { floatArrayOf(1f) } })
-//
-//        for ((i, ix) in trimmedArray[0].withIndex()) {
-//            for (j in ix.indices) {
-//                trimmedArray[0][i][j] = outputArray[0][i][16 + j]//outputArray[0][i][12 + j]
-//            }
-//        }
-
-
-        for ((i, ix) in outputArray[0].withIndex()) {
-            for (j in ix.indices) {
-                var alphaVal = 1f - outputArray[0][i][j][0]
-                val cutoff = 0.6f
-                alphaVal = if (alphaVal > cutoff) cutoff else alphaVal
-
-                val pixelcolor = Color.argb(
-                    (alphaVal * 255).toInt(), 3,
-                    218, 197
-                )
-
-                withAlpha[(i + (extraSpace / 2)) * thisScaleW + j + 0] = pixelcolor
-
-            }
-        }
-//            Log.d("FirstFragment", "withAlpha ${withAlpha.contentToString()}")
-        val alphaBitmap =
-            Bitmap.createBitmap(thisScaleW, thisScaleH + extraSpace, Bitmap.Config.ARGB_8888, true)
-        alphaBitmap.setPixels(withAlpha, 0, thisScaleW, 0, 0, thisScaleW, thisScaleH + extraSpace)
-
-
-
-        this.runOnUiThread {
-            binding.ivOutput.setImageBitmap(
-                alphaBitmap
-            )
-        }
-
-    }
-
-
-    private fun freshnessClassifier(outputArray: Array<FloatArray>) {//Array<FloatArray>
-        //arrayOf(Array(modelScaleH) { Array(modelScaleW) { floatArrayOf(1f) } })
-        Log.d("FirstFragment", "running freshnessClassifier")
-        val labels = arrayListOf(
-            "Fresh apple",
-            "Fresh banana",
-            "Fresh bitter gourd",
-            "Fresh capsicum",
-            "Fresh orange",
-            "Fresh tomato",
-            "Stale apple",
-            "Stale banana",
-            "Stale bitter gourd",
-            "Stale capsicum",
-            "Stale orange",
-            "Stale tomato"
-        )
-        val maxValIndex = outputArray[0].indexOfFirst { it == outputArray[0].maxOrNull() }
-
-        this.runOnUiThread {
-            binding.tvResultOutput.text = labels[maxValIndex]
-        }
-
-    }
 
 
     private fun allPermissionsGranted() = PERMISSIONS_REQUIRED.all {
