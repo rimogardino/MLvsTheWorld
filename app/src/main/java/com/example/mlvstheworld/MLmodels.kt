@@ -9,10 +9,7 @@ import com.example.mlvstheworld.ModelInputDims.modelScaleW
 import com.example.mlvstheworld.databinding.ActivityMainBinding
 
 
-enum class Models {
-    BackgroundRemover, FreshnessClassifier
-}
-
+// is this the best place for this? ¯\_(ツ)_/¯
 object ModelInputDims {
     const val modelScaleH = 176
     const val modelScaleW = 128
@@ -36,7 +33,6 @@ interface MLModelStats {
 }
 
 object BackgroundRemover : MLModelStats {
-    lateinit var thisBinding: ActivityMainBinding
     override val fileName: String = "BackgroundRemoverStatic2WxH_128x176"
     override val outputArray: Array<Array<Array<FloatArray>>> =
         arrayOf(Array(modelScaleH) {
@@ -50,18 +46,14 @@ object BackgroundRemover : MLModelStats {
         binding: ActivityMainBinding,
         outputArray: Array<Array<Array<FloatArray>>>
     ) {
-        thisBinding = binding
-        val withAlpha = IntArray(modelScaleH * modelScaleW * 1) {
-            Color.argb(
-                (0.6f * 255).toInt(), 3,
-                218, 197
-            )
-        }
-
+        val withAlpha = IntArray(modelScaleH * modelScaleW * 1) { 0 }
 
         for ((i, ix) in outputArray[0].withIndex()) {
             for (j in ix.indices) {
+                // the model is trained to darken the background, but we are making a filter
+                // to augment the background, so inverse the value
                 var alphaVal = 1f - outputArray[0][i][j][0]
+                // this leaves a bit of transparency
                 val cutoff = 0.6f
                 alphaVal = if (alphaVal > cutoff) cutoff else alphaVal
 
@@ -74,7 +66,7 @@ object BackgroundRemover : MLModelStats {
 
             }
         }
-//            Log.d("FirstFragment", "withAlpha ${withAlpha.contentToString()}")
+
         val alphaBitmap =
             Bitmap.createBitmap(modelScaleW, modelScaleH, Bitmap.Config.ARGB_8888, true)
         alphaBitmap.setPixels(withAlpha, 0, modelScaleW, 0, 0, modelScaleW, modelScaleH)
@@ -86,9 +78,9 @@ object BackgroundRemover : MLModelStats {
             )
         }
 
-
     }
 
+    // clean the output imageview
     override fun close(context: AppCompatActivity, binding: ActivityMainBinding) {
 
         val cleanBitmap = Bitmap.createBitmap(
@@ -112,10 +104,7 @@ object BackgroundRemover : MLModelStats {
                 cleanBitmap
             )
         }
-
     }
-
-
 }
 
 
@@ -152,6 +141,7 @@ object FreshnessClassifier : MLModelStats {
     }
 
     override fun close(context: AppCompatActivity, binding: ActivityMainBinding) {
+        // nothing to do
         return
     }
 

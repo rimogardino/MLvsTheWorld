@@ -12,7 +12,7 @@ import android.util.Log
 import android.util.Size
 import android.view.Menu
 import android.view.MenuItem
-import android.view.Surface.*
+import android.view.Surface.ROTATION_90
 import androidx.appcompat.app.ActionBarDrawerToggle
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
@@ -57,6 +57,7 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        // Navigation drawer side menu set up
         drawerToggle = ActionBarDrawerToggle(
             this, binding.drawerLayout,
             R.string.openDrawer,
@@ -65,15 +66,18 @@ class MainActivity : AppCompatActivity() {
         binding.drawerLayout.addDrawerListener(drawerToggle)
         drawerToggle.syncState()
 
-        // Navigation drawer side menu set up
-        supportActionBar?.setDisplayHomeAsUpEnabled(true)
+        // This was supposed to make it so that the back button closes the side menu, but
+        // it doesn't work
+//        supportActionBar?.setDisplayHomeAsUpEnabled(true)
 
         binding.navViewMlList.setNavigationItemSelectedListener {
 
             when (it.itemId) {
                 R.id.model_background_remover -> model = BackgroundRemover
                 R.id.model_fresh_class -> {
-                    model.close(this,binding)
+                    // the close function here is to clear the output overlay of
+                    // the BackgroundRemover, that's way it's called first
+                    model.close(this, binding)
                     model = FreshnessClassifier
                 }
 
@@ -104,6 +108,7 @@ class MainActivity : AppCompatActivity() {
 
     @SuppressLint("UnsafeOptInUsageError")
     private fun bindPreview(cameraProvider: ProcessCameraProvider) {
+        //Set up camera preview
         val preview: Preview = Preview.Builder()
             .build()
 
@@ -114,10 +119,9 @@ class MainActivity : AppCompatActivity() {
         preview.setSurfaceProvider(binding.previewView.surfaceProvider)
 
 
-
+        // Here we begin the tensorflow set up
         val imageAnalysis = ImageAnalysis.Builder()
             .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-//            .setTargetRotation(ROTATION_90)
             .setTargetResolution(Size(1280, 960))
             .setTargetRotation(ROTATION_90)
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -145,11 +149,8 @@ class MainActivity : AppCompatActivity() {
             )
             bitmap.copyPixelsFromBuffer(buffer)
 
-
-            // Initialization code
-            // Create an ImageProcessor with all ops required. For more ops, please
-            // refer to the ImageProcessor Architecture section in this README.
-
+            // This was a guessing game to make the output fit the camera preview
+            // so it might not work properly on all devices.
             val imageProcessor = ImageProcessor.Builder()
                 .add(Rot90Op(135))
 //                .add(ResizeWithCropOrPadOp(sizeH, sizeW))
@@ -157,24 +158,25 @@ class MainActivity : AppCompatActivity() {
                 .build()
 
             // Create a TensorImage object. This creates the tensor of the corresponding
-            // tensor type (uint8 in this case) that the TensorFlow Lite interpreter needs.
+            // tensor type (uint8 in this case) that the TensorFlow Lite interpreter needs for
+            // a quantized model soo the 'DataType' is UINT8 (8-bit unsigned integer)
             val tensorImage = TensorImage(DataType.UINT8)
 
-            // Analysis code for every frame
             // Preprocess the image
             tensorImage.load(bitmap)
+
             val processedImage = imageProcessor.process(tensorImage)
-
-
-            // Create a container for the result and specify that this is a quantized model.
-            // Hence, the 'DataType' is defined as UINT8 (8-bit unsigned integer)
-            //            val probabilityBuffer = TensorBuffer.createFixedSize(intArrayOf(1, 7), DataType.UINT8)
-            val tfliteOptions = Interpreter.Options()
-
+            val processedBitmap = processedImage.bitmap
 
             // Initialize interpreter with NNAPI delegate for Android Pie or above
+            // and just increase the number of threads otherwise
+            // also this crashes the virtual device, not sure why.
+            val tfliteOptions = Interpreter.Options()
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 Log.d("GPUFirstFragment", "Running on GPU")
+                // DEPTHWISE_CONV doesn't run on GPU delagte
+                // Although not sure it runs properly on NnApi either, but it does speed things up
                 tfliteOptions.addDelegate(NnApiDelegate())
             } else {
                 tfliteOptions.setNumThreads(4)
@@ -188,7 +190,7 @@ class MainActivity : AppCompatActivity() {
 
                 val mappedByteBuffer = FileUtil.loadMappedFile(
                     this,
-                    "$modelString.tflite"//BackgroundRemoverStaticOvertrained128x96 FreshnessFGclassifier128x128
+                    "$modelString.tflite"
                 )
 
                 tflite = Interpreter(mappedByteBuffer, tfliteOptions)
@@ -198,7 +200,6 @@ class MainActivity : AppCompatActivity() {
                 Log.e("tfliteSupport", "rotation err", e)
             }
 
-// Running inference
 
             val inputBuffer =
                 arrayOf(Array(modelScaleH) { Array(modelScaleW) { floatArrayOf(0f, 0f, 0f) } })
@@ -206,9 +207,7 @@ class MainActivity : AppCompatActivity() {
             val outputArray = model.outputArray
 
 
-            val processedBitmap = processedImage.bitmap
-
-
+            // Convert the bitmap color values to an array of RGB values
             for ((i, ix) in inputBuffer[0].withIndex()) {
                 for (j in ix.indices) {
                     val pixelval = processedBitmap.getPixel(j, i)
@@ -223,24 +222,30 @@ class MainActivity : AppCompatActivity() {
 
 
             // Not happy with this part
-            // Maybe I should train models that have the same inputs and outputs
+            // Maybe I should train models that have the same input AND output shapes
             var result = arrayOf(Array(1) { Array(1) { FloatArray(1) } })
 
+
+            // The ifs are checking if the model has finished switching as sometimes it
+            // gives the output of the another model and it crashes
             when (model.fileName) {
                 BackgroundRemover.fileName -> {
-                    tflite?.run(inputBuffer, outputArray)
-                    result = outputArray
+                    if (tflite?.getOutputTensor(0)?.shape()!![1] == 176) {
+                        tflite.run(inputBuffer, outputArray)
+                        result = outputArray
+                    }
                 }
 
                 FreshnessClassifier.fileName -> {
-                    val outArray = outputArray[0][0]
-                    tflite?.run(inputBuffer, outArray)
-                    result = arrayOf(arrayOf(outArray))
+                    if (tflite?.getOutputTensor(0)?.shape()!![1] == 12) {
+                        val outArray = outputArray[0][0]
+                        tflite.run(inputBuffer, outArray)
+                        result = arrayOf(arrayOf(outArray))
+                    }
                 }
-                else -> null
             }
 
-            model.processOutput(this,binding,result)
+            model.processOutput(this, binding, result)
 
             image.close()
         }
@@ -253,7 +258,6 @@ class MainActivity : AppCompatActivity() {
             preview
         )
     }
-
 
 
     private fun allPermissionsGranted() = PERMISSIONS_REQUIRED.all {
