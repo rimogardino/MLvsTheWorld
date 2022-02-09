@@ -5,7 +5,10 @@ Here is a preview:
 
 ![](MLvsTheWorld.gif)
 
-\* the text is much more readable in real life.
+###### \* the text is much more readable in real life.
 
 Here are the jupyter notebooks that I have used to make the models:
 
+[The human segmentation model](HumanSegmentation.ipynb)
+
+[The fruit freshness clasifier](FreshnessClassifier.ipynb)
